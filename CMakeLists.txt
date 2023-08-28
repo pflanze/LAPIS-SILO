@@ -9,6 +9,12 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 set(CMAKE_CXX_FLAGS "-Wall")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -fsanitize=address")
+if (CMAKE_BUILD_TYPE MATCHES Debug)
+    message("Adding ubsan!")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=undefined")
+    add_compile_options(-fno-omit-frame-pointer)
+endif ()
+
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -static-libstdc++ -static-libgcc")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -42,7 +48,7 @@ find_package(zstd REQUIRED)
 include_directories(SYSTEM
         ${CMAKE_SOURCE_DIR}/include
         ${roaring_INCLUDE_DIRS}
-        )
+)
 
 # ---------------------------------------------------------------------------
 # Sources
