@@ -84,7 +84,7 @@ ReferenceGenomes readFromJson(const std::filesystem::path& reference_genomes_pat
    nlohmann::json reference_genomes_json;
    std::ifstream(reference_genomes_path) >> reference_genomes_json;
 
-   const nlohmann::json nuc_seq_json = reference_genomes_json["nucleotide_sequences"];
+   const nlohmann::json nuc_seq_json = reference_genomes_json["nucleotideSequences"];
    const nlohmann::json aa_seq_json = reference_genomes_json["genes"];
 
    for (const auto& [key, value] : nuc_seq_json.items()) {
