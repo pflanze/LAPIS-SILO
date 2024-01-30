@@ -1,9 +1,14 @@
 #pragma once
 
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <duckdb.hpp>
+#include "silo/preprocessing/sql_function.h"
+#include "silo/storage/pango_lineage_alias.h"
+#include "silo/preprocessing/preprocessing_config.h"
 
 namespace silo {
 
@@ -18,13 +23,21 @@ class PreprocessingDatabase {
   public:
    static constexpr std::string_view COMPRESS_NUC = "compressNuc";
    static constexpr std::string_view COMPRESS_AA = "compressAA";
+   std::vector<std::shared_ptr<CustomSqlFunction>> registered_functions_;
 
   private:
    duckdb::DuckDB duck_db;
    duckdb::Connection connection;
 
   public:
-   PreprocessingDatabase(const std::string& backing_file);
+   PreprocessingDatabase(
+      const std::string& backing_file,
+      const std::vector<std::shared_ptr<CustomSqlFunction>>& registered_functions
+   );
+
+   static std::unique_ptr<PreprocessingDatabase> create(
+      const preprocessing::PreprocessingConfig& preprocessing_config
+   );
 
    duckdb::Connection& getConnection();
 

@@ -26,6 +26,13 @@ std::unordered_map<std::string, std::string> validateFieldsAgainstConfig(
    for (const auto& [field_name, access_path] : found_metadata_fields) {
       if (std::find(config_metadata_fields.begin(), config_metadata_fields.end(), field_name)
        != config_metadata_fields.end()) {
+         if (database_config.getMetadata(field_name)->type == silo::config::ValueType::PANGOLINEAGE) {
+            validated_metadata_fields.emplace(
+               field_name, fmt::format("unalias_pango_lineage({})", access_path)
+            );
+            continue;
+         }
+
          validated_metadata_fields.emplace(field_name, access_path);
       } else {
          SPDLOG_WARN(

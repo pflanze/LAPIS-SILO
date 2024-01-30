@@ -2,16 +2,20 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
 #include <oneapi/tbb/enumerable_thread_specific.h>
+
 #include <spdlog/spdlog.h>
 #include <duckdb.hpp>
 
 #include "silo/common/fasta_reader.h"
 #include "silo/preprocessing/partition.h"
+#include "silo/preprocessing/preprocessing_config.h"
 #include "silo/preprocessing/preprocessing_exception.h"
+#include "silo/preprocessing/sql_function.h"
 #include "silo/storage/reference_genomes.h"
 #include "silo/zstdfasta/zstd_compressor.h"
 #include "silo/zstdfasta/zstdfasta_reader.h"
@@ -100,8 +104,12 @@ std::unordered_map<std::string_view, tbb::enumerable_thread_specific<silo::ZstdC
 
 namespace silo::preprocessing {
 
-PreprocessingDatabase::PreprocessingDatabase(const std::string& backing_file)
-    : duck_db(backing_file),
+PreprocessingDatabase::PreprocessingDatabase(
+   const std::string& backing_file,
+   const std::vector<std::shared_ptr<CustomSqlFunction>>& registered_functions
+)
+    : registered_functions_(registered_functions),
+      duck_db(backing_file),
       connection(duck_db) {
    query("PRAGMA default_null_order='NULLS FIRST';");
    query("SET preserve_insertion_order=FALSE;");
@@ -118,6 +126,28 @@ PreprocessingDatabase::PreprocessingDatabase(const std::string& backing_file)
       {LogicalType::VARCHAR, LogicalType::VARCHAR},
       LogicalType::BLOB,
       Compressors::compressAA
+   );
+
+   for (const auto& function : registered_functions_) {
+      function->applyTo(connection);
+   }
+}
+
+std::unique_ptr<PreprocessingDatabase> PreprocessingDatabase::create(
+   const preprocessing::PreprocessingConfig& preprocessing_config
+) {
+   std::vector<std::shared_ptr<CustomSqlFunction>> registered_functions;
+   if (preprocessing_config.getPangoLineageDefinitionFilename().has_value()) {
+      auto unalias_pango_lineage = std::make_shared<UnaliasPangoLineage>(
+         preprocessing_config.getPangoLineageDefinitionFilename().value(), "unaliasPangoLineage"
+      );
+
+      registered_functions.emplace_back(unalias_pango_lineage);
+   }
+
+   return std::make_unique<PreprocessingDatabase>(
+      preprocessing_config.getPreprocessingDatabaseLocation().value_or(":memory:"),
+      registered_functions
    );
 }
 

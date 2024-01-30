@@ -13,15 +13,16 @@ namespace preprocessing {
 class Preprocessor {
    PreprocessingConfig preprocessing_config;
    config::DatabaseConfig database_config;
-   PreprocessingDatabase preprocessing_db;
+   std::unique_ptr<PreprocessingDatabase> preprocessing_db;
 
   public:
    Preprocessor(
-      const preprocessing::PreprocessingConfig preprocessing_config,
-      const config::DatabaseConfig database_config
+      preprocessing::PreprocessingConfig preprocessing_config,
+      config::DatabaseConfig database_config
    );
 
    Database preprocess();
+
 
   private:
    void buildTablesFromNdjsonInput(
