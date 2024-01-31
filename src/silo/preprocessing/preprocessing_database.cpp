@@ -35,120 +35,30 @@ using duckdb::StringVector;
 using duckdb::Value;
 using duckdb::Vector;
 
-namespace {
-
-class Compressors {
-  public:
-   static std::
-      unordered_map<std::string_view, tbb::enumerable_thread_specific<silo::ZstdCompressor>>
-         nuc_compressors;
-   static std::
-      unordered_map<std::string_view, tbb::enumerable_thread_specific<silo::ZstdCompressor>>
-         aa_compressors;
-
-   static void initialize(const silo::ReferenceGenomes& reference_genomes) {
-      SPDLOG_DEBUG("Preprocessing Database - initialize with reference_genomes");
-      for (const auto& [name, sequence] : reference_genomes.raw_nucleotide_sequences) {
-         SPDLOG_DEBUG("Preprocessing Database - Creating Nucleotide Compressor for '{}'", name);
-         nuc_compressors.emplace(name, silo::ZstdCompressor(sequence));
-      }
-      for (const auto& [name, sequence] : reference_genomes.raw_aa_sequences) {
-         SPDLOG_DEBUG("Preprocessing Database - Creating Amino Acid Compressor for '{}'", name);
-         aa_compressors.emplace(name, silo::ZstdCompressor(sequence));
-      }
-   }
-
-   static void compressNuc(DataChunk& args, ExpressionState& /*state*/, Vector& result) {
-      BinaryExecutor::Execute<string_t, string_t, string_t>(
-         args.data[0],
-         args.data[1],
-         result,
-         args.size(),
-         [&](const string_t uncompressed, const string_t segment_name) {
-            const std::string_view compressed =
-               nuc_compressors.at(segment_name.GetString())
-                  .local()
-                  .compress(uncompressed.GetData(), uncompressed.GetSize());
-            return StringVector::AddStringOrBlob(
-               result, compressed.data(), static_cast<uint32_t>(compressed.size())
-            );
-         }
-      );
-   };
-
-   static void compressAA(DataChunk& args, ExpressionState& /*state*/, Vector& result) {
-      BinaryExecutor::Execute<string_t, string_t, string_t>(
-         args.data[0],
-         args.data[1],
-         result,
-         args.size(),
-         [&](const string_t uncompressed, const string_t gene_name) {
-            const std::string_view compressed =
-               aa_compressors.at(gene_name.GetString())
-                  .local()
-                  .compress(uncompressed.GetData(), uncompressed.GetSize());
-            return StringVector::AddStringOrBlob(
-               result, compressed.data(), static_cast<uint32_t>(compressed.size())
-            );
-         }
-      );
-   }
-};
-
-std::unordered_map<std::string_view, tbb::enumerable_thread_specific<silo::ZstdCompressor>>
-   Compressors::nuc_compressors{};
-std::unordered_map<std::string_view, tbb::enumerable_thread_specific<silo::ZstdCompressor>>
-   Compressors::aa_compressors{};
-
-}  // namespace
-
 namespace silo::preprocessing {
 
 PreprocessingDatabase::PreprocessingDatabase(
    const std::string& backing_file,
-   const std::vector<std::shared_ptr<CustomSqlFunction>>& registered_functions
+   std::shared_ptr<ReferenceGenomes> reference_genomes,
+   std::shared_ptr<PangoLineageAliasLookup> pango_lineage_alias_lookup
 )
-    : registered_functions_(registered_functions),
+    : compress_nucleotide_function(
+         std::make_unique<CompressSequence>("nuc", reference_genomes->raw_nucleotide_sequences)
+      ),
+      compress_amino_acid_function(
+         std::make_unique<CompressSequence>("aa", reference_genomes->raw_aa_sequences)
+      ),
+      unalias_pango_lineage_function(
+         std::make_unique<UnaliasPangoLineage>(std::move(pango_lineage_alias_lookup))
+      ),
       duck_db(backing_file),
       connection(duck_db) {
    query("PRAGMA default_null_order='NULLS FIRST';");
    query("SET preserve_insertion_order=FALSE;");
 
-   connection.CreateVectorizedFunction(
-      std::string(COMPRESS_NUC),
-      {LogicalType::VARCHAR, LogicalType::VARCHAR},
-      LogicalType::BLOB,
-      Compressors::compressNuc
-   );
-
-   connection.CreateVectorizedFunction(
-      std::string(COMPRESS_AA),
-      {LogicalType::VARCHAR, LogicalType::VARCHAR},
-      LogicalType::BLOB,
-      Compressors::compressAA
-   );
-
-   for (const auto& function : registered_functions_) {
-      function->applyTo(connection);
-   }
-}
-
-std::unique_ptr<PreprocessingDatabase> PreprocessingDatabase::create(
-   const preprocessing::PreprocessingConfig& preprocessing_config
-) {
-   std::vector<std::shared_ptr<CustomSqlFunction>> registered_functions;
-   if (preprocessing_config.getPangoLineageDefinitionFilename().has_value()) {
-      auto unalias_pango_lineage = std::make_shared<UnaliasPangoLineage>(
-         preprocessing_config.getPangoLineageDefinitionFilename().value(), "unaliasPangoLineage"
-      );
-
-      registered_functions.emplace_back(unalias_pango_lineage);
-   }
-
-   return std::make_unique<PreprocessingDatabase>(
-      preprocessing_config.getPreprocessingDatabaseLocation().value_or(":memory:"),
-      registered_functions
-   );
+   compress_nucleotide_function->applyTo(connection);
+   compress_amino_acid_function->applyTo(connection);
+   unalias_pango_lineage_function->applyTo(connection);
 }
 
 std::unique_ptr<MaterializedQueryResult> PreprocessingDatabase::query(std::string sql_query) {
@@ -161,9 +71,6 @@ std::unique_ptr<MaterializedQueryResult> PreprocessingDatabase::query(std::strin
    return result;
 }
 
-void PreprocessingDatabase::registerSequences(const silo::ReferenceGenomes& reference_genomes) {
-   Compressors::initialize(reference_genomes);
-}
 
 Connection& PreprocessingDatabase::getConnection() {
    return connection;

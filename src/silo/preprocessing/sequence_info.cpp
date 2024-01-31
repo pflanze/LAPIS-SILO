@@ -4,6 +4,7 @@
 
 #include "silo/preprocessing/preprocessing_database.h"
 #include "silo/preprocessing/preprocessing_exception.h"
+#include "silo/preprocessing/sql_function.h"
 #include "silo/storage/reference_genomes.h"
 
 namespace silo::preprocessing {
@@ -17,28 +18,34 @@ SequenceInfo::SequenceInfo(const silo::ReferenceGenomes& reference_genomes) {
    }
 }
 
-std::vector<std::string> SequenceInfo::getSequenceSelects() {
+std::vector<std::string> SequenceInfo::getSequenceSelects(
+   const silo::preprocessing::PreprocessingDatabase& preprocessingDatabase
+) {
    std::vector<std::string> sequence_selects;
    sequence_selects.reserve(nuc_sequence_names.size() + aa_sequence_names.size());
    for (const std::string& name : nuc_sequence_names) {
+
       sequence_selects.emplace_back(fmt::format(
-         "{0}(alignedNucleotideSequences.{1}, "
-         "'{1}') as nuc_{1}",
-         preprocessing::PreprocessingDatabase::COMPRESS_NUC,
+         "{0} as nuc_{1}",
+         preprocessingDatabase.compress_nucleotide_function->generateSqlStatement(
+            "alignedNucleotideSequences." + name, name
+         ),
          name
       ));
       sequence_selects.emplace_back(fmt::format(
-         "{0}(unalignedNucleotideSequences.{1}, "
-         "'{1}') as unaligned_nuc_{1}",
-         preprocessing::PreprocessingDatabase::COMPRESS_NUC,
+         "{0} as unaligned_nuc_{1}",
+         preprocessingDatabase.compress_nucleotide_function->generateSqlStatement(
+            "unalignedNucleotideSequences." + name, name
+         ),
          name
       ));
    }
    for (const std::string& name : aa_sequence_names) {
       sequence_selects.emplace_back(fmt::format(
-         "{0}(alignedAminoAcidSequences.{1}, "
-         "'{1}') as gene_{1}",
-         preprocessing::PreprocessingDatabase::COMPRESS_AA,
+         "{0} as gene_{1}",
+         preprocessingDatabase.compress_nucleotide_function->generateSqlStatement(
+            "alignedAminoAcidSequences." + name, name
+         ),
          name
       ));
    }

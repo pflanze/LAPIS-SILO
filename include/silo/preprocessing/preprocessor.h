@@ -7,36 +7,37 @@
 namespace silo {
 class Database;
 class PangoLineageAliasLookup;
+class ReferenceGenomes;
 
 namespace preprocessing {
 
 class Preprocessor {
    PreprocessingConfig preprocessing_config;
+   PreprocessingDatabase preprocessing_db;
    config::DatabaseConfig database_config;
-   std::unique_ptr<PreprocessingDatabase> preprocessing_db;
+   std::shared_ptr<ReferenceGenomes> reference_genomes;
+   std::shared_ptr<PangoLineageAliasLookup> pango_lineage_alias_lookup;
 
   public:
    Preprocessor(
       preprocessing::PreprocessingConfig preprocessing_config,
-      config::DatabaseConfig database_config
+      config::DatabaseConfig database_config,
+      std::shared_ptr<ReferenceGenomes> reference_genomes,
+      std::shared_ptr<PangoLineageAliasLookup> pango_lineage_alias_lookup
    );
 
    Database preprocess();
 
-
   private:
-   void buildTablesFromNdjsonInput(
-      const std::filesystem::path& file_name,
-      const ReferenceGenomes& reference_genomes
-   );
+   void buildTablesFromNdjsonInput(const std::filesystem::path& file_name);
    void buildMetadataTableFromFile(const std::filesystem::path& metadata_filename);
 
    void buildPartitioningTable();
    void buildPartitioningTableByColumn(const std::string& partition_by_field);
    void buildEmptyPartitioning();
 
-   void createSequenceViews(const ReferenceGenomes& reference_genomes);
-   void createPartitionedSequenceTables(const ReferenceGenomes& reference_genomes);
+   void createSequenceViews();
+   void createPartitionedSequenceTables();
    void createPartitionedTableForSequence(
       const std::string& sequence_name,
       const std::string& reference_sequence,

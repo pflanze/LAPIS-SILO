@@ -7,7 +7,9 @@
 #include "silo/database.h"
 #include "silo/database_info.h"
 #include "silo/preprocessing/preprocessing_config_reader.h"
+#include "silo/preprocessing/sql_function.h"
 #include "silo/query_engine/query_engine.h"
+#include "silo/storage/reference_genomes.h"
 
 namespace {
 
@@ -107,7 +109,21 @@ TEST_P(PreprocessorTestFixture, shouldProcessDataSetWithMissingSequences) {
       scenario.input_directory + "database_config.yaml"
    );
 
-   silo::preprocessing::Preprocessor preprocessor(config, database_config);
+   const auto reference_genomes = std::make_shared<silo::ReferenceGenomes>(
+      silo::ReferenceGenomes::readFromFile(config.getReferenceGenomeFilename())
+   );
+
+   auto alias_key = (config.getPangoLineageDefinitionFilename())
+                       ? std::make_shared<silo::PangoLineageAliasLookup>(
+                            silo::PangoLineageAliasLookup::readFromFile(
+                               config.getPangoLineageDefinitionFilename().value()
+                            )
+                         )
+                       : std::make_shared<silo::PangoLineageAliasLookup>();
+
+   silo::preprocessing::Preprocessor preprocessor(
+      config, database_config, reference_genomes, alias_key
+   );
    auto database = preprocessor.preprocess();
 
    const auto database_info = database.getDatabaseInfo();

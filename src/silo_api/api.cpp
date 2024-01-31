@@ -24,6 +24,8 @@
 #include "silo/preprocessing/preprocessing_config.h"
 #include "silo/preprocessing/preprocessing_config_reader.h"
 #include "silo/preprocessing/preprocessor.h"
+#include "silo/preprocessing/sql_function.h"
+#include "silo/storage/reference_genomes.h"
 #include "silo_api/database_directory_watcher.h"
 #include "silo_api/database_mutex.h"
 #include "silo_api/logging.h"
@@ -207,8 +209,24 @@ class SiloServer : public Poco::Util::ServerApplication {
          const auto preprocessing_config = preprocessingConfig(config());
          auto database_config = databaseConfig(config());
 
-         auto preprocessor =
-            silo::preprocessing::Preprocessor(preprocessing_config, database_config);
+         SPDLOG_INFO("preprocessing - reading reference genome");
+         const auto reference_genomes = std::make_shared<silo::ReferenceGenomes>(
+            silo::ReferenceGenomes::readFromFile(preprocessing_config.getReferenceGenomeFilename())
+         );
+
+         SPDLOG_INFO("preprocessing - building alias key");
+         auto alias_key =
+            (preprocessing_config.getPangoLineageDefinitionFilename())
+               ? std::make_shared<silo::PangoLineageAliasLookup>(
+                    silo::PangoLineageAliasLookup::readFromFile(
+                       preprocessing_config.getPangoLineageDefinitionFilename().value()
+                    )
+                 )
+               : std::make_shared<silo::PangoLineageAliasLookup>();
+
+         auto preprocessor = silo::preprocessing::Preprocessor(
+            preprocessing_config, database_config, reference_genomes, alias_key
+         );
 
          auto database = preprocessor.preprocess();
 

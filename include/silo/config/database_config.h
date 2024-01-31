@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <fmt/core.h>
+#include <silo/storage/pango_lineage_alias.h>
 
 namespace silo::config {
 
@@ -48,6 +49,8 @@ class DatabaseConfig {
   public:
    std::string default_nucleotide_sequence;
    DatabaseSchema schema;
+
+   PangoLineageAliasLookup alias_key;
 
    [[nodiscard]] std::optional<DatabaseMetadata> getMetadata(const std::string& name) const;
 

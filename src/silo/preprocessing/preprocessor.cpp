@@ -12,37 +12,32 @@
 #include "silo/database_info.h"
 #include "silo/preprocessing/metadata_info.h"
 #include "silo/preprocessing/preprocessing_config.h"
-#include "silo/preprocessing/preprocessing_database.h"
 #include "silo/preprocessing/preprocessing_exception.h"
 #include "silo/preprocessing/sequence_info.h"
+#include "silo/preprocessing/sql_function.h"
 #include "silo/storage/reference_genomes.h"
 #include "silo/storage/unaligned_sequence_store.h"
-#include "silo/zstdfasta/zstd_decompressor.h"
 #include "silo/zstdfasta/zstdfasta_table.h"
 
 namespace silo::preprocessing {
 
 Preprocessor::Preprocessor(
    preprocessing::PreprocessingConfig preprocessing_config,
-   config::DatabaseConfig database_config
+   config::DatabaseConfig database_config,
+   std::shared_ptr<ReferenceGenomes> reference_genomes,
+   std::shared_ptr<PangoLineageAliasLookup> pango_lineage_alias_lookup
 )
     : preprocessing_config(std::move(preprocessing_config)),
+      preprocessing_db(
+         this->preprocessing_config.getPreprocessingDatabaseLocation().value_or(":memory:"),
+         reference_genomes,
+         pango_lineage_alias_lookup
+      ),
       database_config(std::move(database_config)),
-      preprocessing_db(PreprocessingDatabase::create(preprocessing_config)) {}
+      reference_genomes(reference_genomes),
+      pango_lineage_alias_lookup(pango_lineage_alias_lookup) {}
 
 Database Preprocessor::preprocess() {
-   SPDLOG_INFO("preprocessing - reading reference genome");
-   const auto reference_genomes =
-      ReferenceGenomes::readFromFile(preprocessing_config.getReferenceGenomeFilename());
-
-   SPDLOG_INFO("preprocessing - building alias key");
-   const auto pango_lineage_definition_filename =
-      preprocessing_config.getPangoLineageDefinitionFilename();
-   PangoLineageAliasLookup alias_key;
-   if (pango_lineage_definition_filename.has_value()) {
-      alias_key = PangoLineageAliasLookup::readFromFile(pango_lineage_definition_filename.value());
-   }
-
    const auto& ndjson_input_filename = preprocessing_config.getNdjsonInputFilename();
    if (ndjson_input_filename.has_value()) {
       SPDLOG_INFO("preprocessing - ndjson pipeline chosen");
@@ -50,11 +45,11 @@ Database Preprocessor::preprocess() {
          "preprocessing - building preprocessing tables from ndjson input '{}'",
          ndjson_input_filename.value().string()
       );
-      buildTablesFromNdjsonInput(ndjson_input_filename.value(), reference_genomes);
+      buildTablesFromNdjsonInput(ndjson_input_filename.value());
       SPDLOG_DEBUG("preprocessing - building partitioning tables");
       buildPartitioningTable();
       SPDLOG_DEBUG("preprocessing - creating compressed sequence views for building SILO");
-      createSequenceViews(reference_genomes);
+      createSequenceViews();
    } else {
       SPDLOG_INFO("preprocessing - classic metadata file pipeline chosen");
       SPDLOG_DEBUG(
@@ -65,11 +60,11 @@ Database Preprocessor::preprocess() {
       SPDLOG_DEBUG("preprocessing - building partitioning tables");
       buildPartitioningTable();
       SPDLOG_DEBUG("preprocessing - creating partitioned sequence tables for building SILO");
-      createPartitionedSequenceTables(reference_genomes);
+      createPartitionedSequenceTables();
    }
    SPDLOG_INFO("preprocessing - finished initial loading of data");
 
-   const auto partition_descriptor = preprocessing_db->getPartitionDescriptor();
+   const auto partition_descriptor = preprocessing_db.getPartitionDescriptor();
 
    std::string order_by_clause = database_config.schema.getStrictOrderByClause();
    SPDLOG_INFO("preprocessing - order by clause is {}", order_by_clause);
@@ -78,17 +73,14 @@ Database Preprocessor::preprocess() {
 
    return buildDatabase(
       partition_descriptor,
-      reference_genomes,
+      *reference_genomes,
       order_by_clause,
-      alias_key,
+      *pango_lineage_alias_lookup,
       preprocessing_config.getIntermediateResultsDirectory()
    );
 }
 
-void Preprocessor::buildTablesFromNdjsonInput(
-   const std::filesystem::path& file_name,
-   const ReferenceGenomes& reference_genomes
-) {
+void Preprocessor::buildTablesFromNdjsonInput(const std::filesystem::path& file_name) {
    if (!std::filesystem::exists(file_name)) {
       throw silo::preprocessing::PreprocessingException(
          fmt::format("The specified input file {} does not exist.", file_name.string())
@@ -100,26 +92,24 @@ void Preprocessor::buildTablesFromNdjsonInput(
       );
    }
 
-   SequenceInfo sequence_info(reference_genomes);
-   sequence_info.validate(preprocessing_db->getConnection(), file_name);
+   SequenceInfo sequence_info(*reference_genomes);
+   sequence_info.validate(preprocessing_db.getConnection(), file_name);
 
    const auto metadata_info = MetadataInfo::validateFromNdjsonFile(file_name, database_config);
 
-   PreprocessingDatabase::registerSequences(reference_genomes);
-
-   (void)preprocessing_db->query(fmt::format(
+   (void)preprocessing_db.query(fmt::format(
       R"-(
          CREATE OR REPLACE TABLE preprocessing_table AS SELECT {}, {}
          FROM '{}'
          WHERE metadata.{} is not null;
       )-",
       boost::join(metadata_info.getMetadataSelects(), ","),
-      boost::join(sequence_info.getSequenceSelects(), ","),
+      boost::join(sequence_info.getSequenceSelects(preprocessing_db), ","),
       file_name.string(),
       database_config.schema.primary_key
    ));
 
-   (void)preprocessing_db->query(fmt::format(
+   (void)preprocessing_db.query(fmt::format(
       R"-(
          create or replace view metadata_table as
          select {}
@@ -133,7 +123,7 @@ void Preprocessor::buildMetadataTableFromFile(const std::filesystem::path& metad
    const MetadataInfo metadata_info =
       MetadataInfo::validateFromMetadataFile(metadata_filename, database_config);
 
-   (void)preprocessing_db->query(fmt::format(
+   (void)preprocessing_db.query(fmt::format(
       "create or replace table metadata_table as\n"
       "select {}\n"
       "from '{}';",
@@ -158,7 +148,7 @@ void Preprocessor::buildPartitioningTable() {
 void Preprocessor::buildPartitioningTableByColumn(const std::string& partition_by_field) {
    SPDLOG_INFO("preprocessing - calculating partitions");
 
-   (void)preprocessing_db->query(fmt::format(
+   (void)preprocessing_db.query(fmt::format(
       R"-(
 create
 or replace table partition_keys as
@@ -172,7 +162,7 @@ from (SELECT {} as partition_key, COUNT(*) as count
    ));
 
    // create Recursive Hierarchical Partitioning By Partition Field
-   (void)preprocessing_db->query(
+   (void)preprocessing_db.query(
       R"-(
 create or replace table partitioning as
 with recursive
@@ -198,7 +188,7 @@ from (select from_id, max(to_id) as to_id, max(count) as count
 )-"
    );
 
-   (void)preprocessing_db->query(
+   (void)preprocessing_db.query(
       R"-(
 create
 or replace table partition_key_to_partition as
@@ -211,7 +201,7 @@ where partition_keys.id >= partitioning.from_id
 )-"
    );
 
-   (void)preprocessing_db->query(fmt::format(
+   (void)preprocessing_db.query(fmt::format(
       R"-(
 create
 or replace view partitioned_metadata as
@@ -234,7 +224,7 @@ void Preprocessor::buildEmptyPartitioning() {
       "putting all sequences into the same partition"
    );
 
-   (void)preprocessing_db->query(
+   (void)preprocessing_db.query(
       R"-(
 create or replace table partitioning as
 select 0::bigint as partition_id, 0::bigint as from_id, 0::bigint as to_id, count(*) as count
@@ -242,12 +232,12 @@ from metadata_table;
 )-"
    );
 
-   (void)preprocessing_db->query(
+   (void)preprocessing_db.query(
       "create or replace table partition_key_to_partition as\n"
       "select 0::bigint as partition_key, 0::bigint as partition_id;"
    );
 
-   (void)preprocessing_db->query(
+   (void)preprocessing_db.query(
       "create\n"
       "or replace view partitioned_metadata as\n"
       "select 0::bigint as partition_id, metadata_table.*\n"
@@ -255,7 +245,7 @@ from metadata_table;
    );
 }
 
-void Preprocessor::createSequenceViews(const ReferenceGenomes& reference_genomes) {
+void Preprocessor::createSequenceViews() {
    std::string order_by_select =
       ", " + database_config.schema.primary_key + " as " + database_config.schema.primary_key;
    if (database_config.schema.date_to_sort_by.has_value()) {
@@ -277,8 +267,8 @@ void Preprocessor::createSequenceViews(const ReferenceGenomes& reference_genomes
       partition_by_where = "";
    }
 
-   for (const auto& [seq_name, _] : reference_genomes.raw_nucleotide_sequences) {
-      (void)preprocessing_db->query(fmt::format(
+   for (const auto& [seq_name, _] : reference_genomes->raw_nucleotide_sequences) {
+      (void)preprocessing_db.query(fmt::format(
          "create or replace view nuc_{0} as\n"
          "select {1} as key, nuc_{0} as sequence,"
          "{2}"
@@ -291,7 +281,7 @@ void Preprocessor::createSequenceViews(const ReferenceGenomes& reference_genomes
          order_by_select,
          partition_by_where
       ));
-      (void)preprocessing_db->query(fmt::format(
+      (void)preprocessing_db.query(fmt::format(
          "create or replace view unaligned_nuc_{0} as\n"
          "select {1} as key, unaligned_nuc_{0} as sequence,"
          "{2}"
@@ -306,8 +296,8 @@ void Preprocessor::createSequenceViews(const ReferenceGenomes& reference_genomes
       ));
    }
 
-   for (const auto& [seq_name, _] : reference_genomes.raw_aa_sequences) {
-      (void)preprocessing_db->query(fmt::format(
+   for (const auto& [seq_name, _] : reference_genomes->raw_aa_sequences) {
+      (void)preprocessing_db.query(fmt::format(
          "create or replace view gene_{0} as\n"
          "select {1} as key, gene_{0} as sequence, "
          "{2}\n"
@@ -323,9 +313,9 @@ void Preprocessor::createSequenceViews(const ReferenceGenomes& reference_genomes
    }
 }
 
-void Preprocessor::createPartitionedSequenceTables(const ReferenceGenomes& reference_genomes) {
+void Preprocessor::createPartitionedSequenceTables() {
    for (const auto& [sequence_name, reference_sequence] :
-        reference_genomes.raw_nucleotide_sequences) {
+        reference_genomes->raw_nucleotide_sequences) {
       createPartitionedTableForSequence(
          sequence_name,
          reference_sequence,
@@ -342,7 +332,7 @@ void Preprocessor::createPartitionedSequenceTables(const ReferenceGenomes& refer
       );
    }
 
-   for (const auto& [sequence_name, reference_sequence] : reference_genomes.raw_aa_sequences) {
+   for (const auto& [sequence_name, reference_sequence] : reference_genomes->raw_aa_sequences) {
       createPartitionedTableForSequence(
          sequence_name,
          reference_sequence,
@@ -369,9 +359,9 @@ void Preprocessor::createPartitionedTableForSequence(
    const std::string raw_table_name = "raw_" + table_prefix + sequence_name;
    const std::string table_name = table_prefix + sequence_name;
 
-   preprocessing_db->generateSequenceTableFromFasta(raw_table_name, reference_sequence, filename);
+   preprocessing_db.generateSequenceTableFromFasta(raw_table_name, reference_sequence, filename);
 
-   (void)preprocessing_db->query(fmt::format(
+   (void)preprocessing_db.query(fmt::format(
       R"-(
          create or replace view {} as
          select key, sequence,
@@ -420,7 +410,7 @@ Database Preprocessor::buildDatabase(
          for (size_t chunk_index = 0; chunk_index < part.getPartitionChunks().size();
               ++chunk_index) {
             const uint32_t sequences_added = database.partitions[partition_id].columns.fill(
-               preprocessing_db->getConnection(), partition_id, order_by_clause, database_config
+               preprocessing_db.getConnection(), partition_id, order_by_clause, database_config
             );
             database.partitions[partition_id].sequence_count += sequences_added;
          }
@@ -447,7 +437,7 @@ Database Preprocessor::buildDatabase(
                      );
 
                      silo::ZstdFastaTableReader sequence_input(
-                        preprocessing_db->getConnection(),
+                        preprocessing_db.getConnection(),
                         "nuc_" + nuc_name,
                         reference_sequence,
                         "sequence",
@@ -459,7 +449,7 @@ Database Preprocessor::buildDatabase(
                      );
 
                      silo::ZstdFastaTableReader unaligned_sequence_input(
-                        preprocessing_db->getConnection(),
+                        preprocessing_db.getConnection(),
                         "unaligned_nuc_" + nuc_name,
                         reference_sequence,
                         "sequence",
@@ -480,7 +470,7 @@ Database Preprocessor::buildDatabase(
                      );
 
                      silo::ZstdFastaTableReader sequence_input(
-                        preprocessing_db->getConnection(),
+                        preprocessing_db.getConnection(),
                         "gene_" + aa_name,
                         reference_sequence,
                         "sequence",

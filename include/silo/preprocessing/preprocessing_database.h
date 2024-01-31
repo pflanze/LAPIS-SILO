@@ -6,7 +6,6 @@
 #include <string>
 
 #include <duckdb.hpp>
-#include "silo/preprocessing/sql_function.h"
 #include "silo/storage/pango_lineage_alias.h"
 #include "silo/preprocessing/preprocessing_config.h"
 
@@ -14,6 +13,8 @@ namespace silo {
 
 class ZstdFastaTable;
 class ReferenceGenomes;
+class UnaliasPangoLineage;
+class CompressSequence;
 
 namespace preprocessing {
 
@@ -21,9 +22,9 @@ class Partitions;
 
 class PreprocessingDatabase {
   public:
-   static constexpr std::string_view COMPRESS_NUC = "compressNuc";
-   static constexpr std::string_view COMPRESS_AA = "compressAA";
-   std::vector<std::shared_ptr<CustomSqlFunction>> registered_functions_;
+   std::unique_ptr<CompressSequence> compress_nucleotide_function;
+   std::unique_ptr<CompressSequence> compress_amino_acid_function;
+   std::unique_ptr<UnaliasPangoLineage> unalias_pango_lineage_function;
 
   private:
    duckdb::DuckDB duck_db;
@@ -32,18 +33,13 @@ class PreprocessingDatabase {
   public:
    PreprocessingDatabase(
       const std::string& backing_file,
-      const std::vector<std::shared_ptr<CustomSqlFunction>>& registered_functions
-   );
-
-   static std::unique_ptr<PreprocessingDatabase> create(
-      const preprocessing::PreprocessingConfig& preprocessing_config
+      std::shared_ptr<ReferenceGenomes> reference_genomes,
+      std::shared_ptr<PangoLineageAliasLookup> pango_lineage_alias_lookup
    );
 
    duckdb::Connection& getConnection();
 
    Partitions getPartitionDescriptor();
-
-   static void registerSequences(const silo::ReferenceGenomes& reference_genomes);
 
    std::unique_ptr<duckdb::MaterializedQueryResult> query(std::string sql_query);
 
