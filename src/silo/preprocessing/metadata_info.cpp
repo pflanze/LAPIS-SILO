@@ -7,12 +7,14 @@
 #include "silo/config/database_config.h"
 #include "silo/preprocessing/preprocessing_database.h"
 #include "silo/preprocessing/preprocessing_exception.h"
+#include "silo/preprocessing/sql_function.h"
 
 namespace {
 
 std::unordered_map<std::string, std::string> validateFieldsAgainstConfig(
    const std::unordered_map<std::string, std::string>& found_metadata_fields,
-   const silo::config::DatabaseConfig& database_config
+   const silo::config::DatabaseConfig& database_config,
+   const silo::preprocessing::PreprocessingDatabase& preprocessing_database
 ) {
    std::vector<std::string> config_metadata_fields;
    std::transform(
@@ -26,13 +28,6 @@ std::unordered_map<std::string, std::string> validateFieldsAgainstConfig(
    for (const auto& [field_name, access_path] : found_metadata_fields) {
       if (std::find(config_metadata_fields.begin(), config_metadata_fields.end(), field_name)
        != config_metadata_fields.end()) {
-         if (database_config.getMetadata(field_name)->type == silo::config::ValueType::PANGOLINEAGE) {
-            validated_metadata_fields.emplace(
-               field_name, fmt::format("unalias_pango_lineage({})", access_path)
-            );
-            continue;
-         }
-
          validated_metadata_fields.emplace(field_name, access_path);
       } else {
          SPDLOG_WARN(
@@ -50,6 +45,15 @@ std::unordered_map<std::string, std::string> validateFieldsAgainstConfig(
             "not contained in the input.",
             name
          ));
+      }
+   }
+
+   for (const auto& [field_name, access_path] : validated_metadata_fields) {
+      const auto metadata = database_config.getMetadata(field_name);
+      if (metadata->type == silo::config::ValueType::PANGOLINEAGE) {
+         validated_metadata_fields.at(field_name) =
+            preprocessing_database.unalias_pango_lineage_function->generateSqlStatement(access_path
+            );
       }
    }
 
@@ -110,7 +114,8 @@ MetadataInfo::MetadataInfo(std::unordered_map<std::string, std::string> metadata
 
 MetadataInfo MetadataInfo::validateFromMetadataFile(
    const std::filesystem::path& metadata_file,
-   const silo::config::DatabaseConfig& database_config
+   const silo::config::DatabaseConfig& database_config,
+   const silo::preprocessing::PreprocessingDatabase& preprocessing_database
 ) {
    duckdb::DuckDB duck_db(nullptr);
    duckdb::Connection connection(duck_db);
@@ -123,14 +128,15 @@ MetadataInfo MetadataInfo::validateFromMetadataFile(
       file_metadata_fields[result->ColumnName(idx)] = "\"" + result->ColumnName(idx) + "\"";
    }
    const std::unordered_map<std::string, std::string> validated_metadata_fields =
-      validateFieldsAgainstConfig(file_metadata_fields, database_config);
+      validateFieldsAgainstConfig(file_metadata_fields, database_config, preprocessing_database);
 
    return {validated_metadata_fields};
 }
 
 MetadataInfo MetadataInfo::validateFromNdjsonFile(
    const std::filesystem::path& ndjson_file,
-   const silo::config::DatabaseConfig& database_config
+   const silo::config::DatabaseConfig& database_config,
+   const silo::preprocessing::PreprocessingDatabase& preprocessing_database
 ) {
    duckdb::DuckDB duck_db(nullptr);
    duckdb::Connection connection(duck_db);
@@ -165,25 +171,25 @@ MetadataInfo MetadataInfo::validateFromNdjsonFile(
    detectInsertionLists(ndjson_file, metadata_fields_to_validate);
 
    const std::unordered_map<std::string, std::string> validated_metadata_fields =
-      validateFieldsAgainstConfig(metadata_fields_to_validate, database_config);
+      validateFieldsAgainstConfig(
+         metadata_fields_to_validate, database_config, preprocessing_database
+      );
 
    return {validated_metadata_fields};
 }
 
 std::vector<std::string> MetadataInfo::getMetadataFields() const {
    std::vector<std::string> ret;
-   ret.reserve(metadata_selects.size());
    for (const auto& [field, _] : metadata_selects) {
-      ret.push_back("\"" + field + "\"");
+      ret.emplace_back("\"" + field + "\"");
    }
    return ret;
 }
 
 std::vector<std::string> MetadataInfo::getMetadataSelects() const {
    std::vector<std::string> ret;
-   ret.reserve(metadata_selects.size());
    for (const auto& [field, select] : metadata_selects) {
-      ret.push_back(fmt::format(R"({} as "{}")", select, field));
+      ret.emplace_back(fmt::format(R"({} as "{}")", select, field));
    }
    return ret;
 }

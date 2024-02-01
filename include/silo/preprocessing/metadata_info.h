@@ -21,17 +21,22 @@ class MetadataInfo {
   public:
    static MetadataInfo validateFromMetadataFile(
       const std::filesystem::path& metadata_file,
-      const silo::config::DatabaseConfig& database_config
+      const silo::config::DatabaseConfig& database_config,
+      const silo::preprocessing::PreprocessingDatabase& preprocessing_database
+
    );
 
    static MetadataInfo validateFromNdjsonFile(
       const std::filesystem::path& ndjson_file,
-      const silo::config::DatabaseConfig& database_config
+      const silo::config::DatabaseConfig& database_config,
+      const silo::preprocessing::PreprocessingDatabase& preprocessing_database
    );
 
    std::vector<std::string> getMetadataFields() const;
 
-   std::vector<std::string> getMetadataSelects() const;
+   std::vector<std::string> getMetadataSelects(
+
+   ) const;
 };
 }  // namespace preprocessing
 

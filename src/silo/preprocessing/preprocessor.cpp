@@ -95,7 +95,8 @@ void Preprocessor::buildTablesFromNdjsonInput(const std::filesystem::path& file_
    SequenceInfo sequence_info(*reference_genomes);
    sequence_info.validate(preprocessing_db.getConnection(), file_name);
 
-   const auto metadata_info = MetadataInfo::validateFromNdjsonFile(file_name, database_config);
+   const auto metadata_info =
+      MetadataInfo::validateFromNdjsonFile(file_name, database_config, preprocessing_db);
 
    (void)preprocessing_db.query(fmt::format(
       R"-(
@@ -121,7 +122,7 @@ void Preprocessor::buildTablesFromNdjsonInput(const std::filesystem::path& file_
 
 void Preprocessor::buildMetadataTableFromFile(const std::filesystem::path& metadata_filename) {
    const MetadataInfo metadata_info =
-      MetadataInfo::validateFromMetadataFile(metadata_filename, database_config);
+      MetadataInfo::validateFromMetadataFile(metadata_filename, database_config, preprocessing_db);
 
    (void)preprocessing_db.query(fmt::format(
       "create or replace table metadata_table as\n"
