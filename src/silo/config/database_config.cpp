@@ -215,6 +215,16 @@ void DatabaseConfig::writeConfig(const std::filesystem::path& config_path) const
    std::ofstream out_file(config_path);
    out_file << YAML::Dump(node);
 }
+std::vector<std::string> DatabaseConfig::getMetadataNames() const {
+   std::vector<std::string> config_metadata_fields;
+   std::transform(
+      schema.metadata.begin(),
+      schema.metadata.end(),
+      std::back_inserter(config_metadata_fields),
+      [](auto metadata) { return metadata.name; }
+   );
+   return config_metadata_fields;
+}
 
 DatabaseConfig DatabaseConfigReader::readConfig(const std::filesystem::path& config_path) const {
    SPDLOG_INFO("Reading database config from {}", config_path.string());

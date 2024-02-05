@@ -46,8 +46,10 @@ Database Preprocessor::preprocess() {
          ndjson_input_filename.value().string()
       );
       buildTablesFromNdjsonInput(ndjson_input_filename.value());
+
       SPDLOG_DEBUG("preprocessing - building partitioning tables");
       buildPartitioningTable();
+
       SPDLOG_DEBUG("preprocessing - creating compressed sequence views for building SILO");
       createSequenceViews();
    } else {
@@ -57,8 +59,10 @@ Database Preprocessor::preprocess() {
          preprocessing_config.getMetadataInputFilename().string()
       );
       buildMetadataTableFromFile(preprocessing_config.getMetadataInputFilename());
+
       SPDLOG_DEBUG("preprocessing - building partitioning tables");
       buildPartitioningTable();
+
       SPDLOG_DEBUG("preprocessing - creating partitioned sequence tables for building SILO");
       createPartitionedSequenceTables();
    }

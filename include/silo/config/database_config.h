@@ -53,6 +53,7 @@ class DatabaseConfig {
    PangoLineageAliasLookup alias_key;
 
    [[nodiscard]] std::optional<DatabaseMetadata> getMetadata(const std::string& name) const;
+   std::vector<std::string> getMetadataNames() const;
 
    void writeConfig(const std::filesystem::path& config_path) const;
 };
